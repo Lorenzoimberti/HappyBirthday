@@ -1,89 +1,93 @@
 import datetime
 import json
-from selenium import webdriver
 import time
+from selenium import webdriver
+from selenium.webdriver import Keys
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-eleNM = None
+driver = None
+try:
+    # Generate birthday message
+    def wish_birth(name, personalized_text):
+        if personalized_text:
+            return personalized_text
+        return f"Buon compleanno {name}"  # It's Italian :)
 
-def wish_birth(name, personalizedText):
-    if personalizedText is not None:
-        return personalizedText
-    #This is Italian :)
-    return "Buon compleanno " + name
+    # Reads JSON and filters by attributes (with int conversion check)
+    def get_json_data(path, attr1, attr2, val1, val2):
+        with open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        filtered = []
+        for item in data:
+            try:
+                # Convert to int for safe comparison
+                val1_item = int(item.get(attr1, -1))
+                val2_item = int(item.get(attr2, -1))
+                if val1_item == val1 and val2_item == val2:
+                    filtered.append(item)
+            except (ValueError, TypeError):
+                # Skip if not convertible to int
+                continue
+        return filtered
 
+    print("Script running...")
 
+    # Wait until there are birthdays today
+    namev = []
+    while True:
+        now = datetime.datetime.now()
+        namev = get_json_data("birthdays.json", "birth_month", "birth_date",
+                              now.month, now.day)
+        if namev:
+            break
+        time.sleep(60)  # Check every minute
 
-# use to return names of contacts having their birthday on current date.
-def getJsonData(file, attr1, attr2, attr_val1, attr_val2):
-    # Load the file's data in 'data' variable
-    data = json.load(file)
-    retv = []
+    # Configure Selenium with Chrome profile
+    chropt = webdriver.ChromeOptions()
+    chropt.add_argument(r"--user-data-dir=YOUR_USER_DATA_DIR")
 
-    # If the attributes' value conditions are satisfied, 
-    # append the name into the list to be returned.
-    for i in data:
-        if (i[attr1] == attr_val1 and i[attr2] == attr_val2):
-            retv.append(i)
-    return retv
+    service = Service(r"YOUR CHROMEDRIVER PATH")
+    driver = webdriver.Chrome(service=service, options=chropt)
 
+    driver.get("https://web.whatsapp.com/")
+    # Wait until the page is ready, i.e., search bar is visible
+    wait = WebDriverWait(driver, 30)
+    search_box = wait.until(EC.presence_of_element_located((By.XPATH, '//div[@contenteditable="true"][@data-tab="3"]')))
 
-# Opening the JSON file (birthdays.json) in read only mode.
-data_file = open("birthdays.json", "r")
-namev = []
-print("Script Running")
+    print("Contacts found:", [c['name'] for c in namev])
 
-# This function will keep rerunning at
-# 11:59pm a day before the birthday and break out at 12:00am.
-while True:
-    try:
-        datt = datetime.datetime.now()
-        namev = getJsonData(data_file, "name", "birth_month", "birth_date",
-                            str(datt.month), str(datt.day))
+    # Send the message to each contact
+    for contact in namev:
+        try:
+            contact_name = contact["name"]
+            ele_nm = driver.find_element(By.XPATH, f'//span[contains(@title, "{contact_name}")]')
+            ele_nm.click()
 
-    except json.decoder.JSONDecodeError:
-        continue
-    if (namev != []):
-        break
+            time.sleep(1)
 
-chropt = webdriver.ChromeOptions()
+            # Find the chat input box
+            ele_tf = driver.find_element(By.XPATH, '//div[@contenteditable="true" and @data-tab="10"]')
 
-# adding userdata argument to ChromeOptions object
-chropt.add_argument("user-data-<LOCATION TO YOUR CHROME USER DATA>")
+            # Determine the text to send
+            message = wish_birth(
+                contact.get("nickname") or contact.get("name"),
+                contact.get("personalizedText")
+            )
 
-# Creating a Chrome webdriver object
-driver = webdriver.Chrome(executable_path="<LOCATION TO CHROME WEBDRIVER>",options=chropt)
-driver.get("https://web.whatsapp.com/")
+            # Send message plus Enter key
+            ele_tf.send_keys(message + Keys.ENTER)
+            time.sleep(2)
 
-# delay added to give time for all elements to load
-time.sleep(10)
+            print(f"Message sent to: {contact['name']}")
 
-print(namev)
+        except Exception as ex:
+            print(f"Error with {contact.get('name')}: {ex}")
+            continue
 
-# Finds the chat of your contacts (as in the namev list)
-for inp in namev:
-    try:
-        eleNM = driver.find_element_by_xpath('//span[@title ="{}"]'.format(inp))
-    except Exception as ex:
-        print(ex)
-        continue
-    # Simulates a mouse click on the element
-    eleNM.click()
-
-    while (True):
-        # Finds the chat box element
-        eleTF = driver.find_element_by_class_name("_13mgZ")
-        # Writes the message
-        personalizedText = inp["personalizedText"]
-        if (personalizedText is not None):
-            eleTF.send_keys(wish_birth(None, personalizedText))
-        else:
-            nickname = inp["nickname"]
-            if (nickname is not None):
-                eleTF.send_keys(wish_birth(nickname, None))
-            else:
-                eleTF.send_keys(wish_birth(inp["name"], None))
-        # Finds the Send button
-        eleSND = driver.find_element_by_class_name("_3M-N-")
-        # Simulates a click on it
-        eleSND.click()
-        break
+    print("All messages sent.")
+finally:
+    if driver:
+        driver.quit()
